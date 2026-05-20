@@ -1,4 +1,4 @@
-import imaplib
+﻿import imaplib
 import email
 from email import policy
 from email.mime.text import MIMEText
@@ -7,7 +7,6 @@ import smtplib
 from email.parser import BytesParser
 
 from django.utils import timezone
-from django.shortcuts import get_object_or_404
 
 from rest_framework import viewsets
 from rest_framework.views import APIView
@@ -22,6 +21,9 @@ from .serializers import (
     MailboxSerializer,
     CreateMailboxSerializer,
 )
+from django_q.tasks import async_task
+
+
 
 
 def parse_email_message(raw_bytes):
@@ -43,7 +45,6 @@ def parse_email_message(raw_bytes):
     return subject, sender, body_text, body_html
 
 
-
 class MailboxViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = MailboxSerializer
@@ -61,6 +62,7 @@ class MailboxViewSet(viewsets.ModelViewSet):
         if self.action == 'create':
             return CreateMailboxSerializer
         return MailboxSerializer
+
 
 class FetchEmailsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -83,8 +85,10 @@ class FetchEmailsView(APIView):
 
             for uid in uids[-50:]:
                 uid_str = uid.decode()
-                if EmailMessage.objects.filter(mailbox=mailbox, uid=uid_str).exists():
-                    continue
+
+                # TYMCZASOWO ZAKOMENTOWANE NA POTRZEBY TESTÓW:
+                # if EmailMessage.objects.filter(mailbox=mailbox, uid=uid_str).exists():
+                #     continue
 
                 status, msg_data = mail.fetch(uid, '(RFC822)')
                 if status != 'OK' or not msg_data:
@@ -93,16 +97,26 @@ class FetchEmailsView(APIView):
                 raw_email = msg_data[0][1]
                 subject, sender, body_text, body_html = parse_email_message(raw_email)
 
-                EmailMessage.objects.create(
+                # Używamy update_or_create, aby zresetować stan e-maila przy każdym fetchu
+                new_email, created = EmailMessage.objects.update_or_create(
                     mailbox=mailbox,
-                    subject=subject,
-                    sender=sender,
-                    body_text=body_text,
-                    body_html=body_html,
                     uid=uid_str,
-                    received_at=timezone.now(),
+                    defaults={
+                        'subject': subject,
+                        'sender': sender,
+                        'body_text': body_text,
+                        'body_html': body_html,
+                        'processed': False,  # Resetujemy status przetwarzania
+                        'category': '',  # Czyścimy starą kategorię
+                        'ai_summary': '',  # Czyścimy stare streszczenie
+                        'ai_draft_reply': '',  # Czyścimy stary draft
+                        'priority_score': None,  # Resetujemy priorytet
+                        'received_at': timezone.now()  # Aktualizujemy czas (opcjonalnie)
+                    }
                 )
                 count += 1
+
+                async_task('emails.tasks.agent_classify_email', new_email.id)
 
             mail.logout()
         except Exception as e:
@@ -135,6 +149,17 @@ class FetchEmailsView(APIView):
         })
 
 
+class ClearEmailsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        deleted_count, _ = EmailMessage.objects.filter(mailbox__user=request.user).delete()
+
+        return Response({
+            "message": "Emails cleared successfully",
+            "deleted_count": deleted_count
+        })
+
 
 class ListEmailsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -152,6 +177,7 @@ class ListEmailsView(APIView):
         serializer = EmailMessageSerializer(emails, many=True)
         return Response(serializer.data)
 
+
 class TestListEmailsView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -163,6 +189,7 @@ class TestListEmailsView(APIView):
         emails = qs.order_by('-received_at')[:1000]
         serializer = EmailMessageSerializer(emails, many=True)
         return Response(serializer.data)
+
 
 class SendEmailView(APIView):
     permission_classes = [IsAuthenticated]

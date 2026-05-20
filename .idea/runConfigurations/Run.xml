@@ -1,0 +1,9 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Run" type="CompoundRunConfigurationType">
+    <toRun name="email-agents" type="Python.DjangoServer" />
+    <toRun name="docker-compose.yml: Compose Deployment" type="docker-deploy" />
+    <toRun name="Celery worker" type="PythonConfigurationType" />
+    <toRun name="Ollama" type="ShConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>

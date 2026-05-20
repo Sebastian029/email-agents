@@ -40,10 +40,24 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
 
+    'django_q',
+
     'accounts',
     'emails',
     'api',
 ]
+
+Q_CLUSTER = {
+    'name': 'DjangORM',
+    'workers': 1,
+    'timeout': 600,
+    'retry': 660,
+    'queue_limit': 1,
+    'bulk': 1,
+    'orm': 'default',
+    'sync': False,
+    'catch_up': False
+}
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -123,6 +137,11 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/

@@ -23,6 +23,14 @@ class EmailMessage(models.Model):
     body_text = models.TextField()
     body_html = models.TextField(blank=True)
     received_at = models.DateTimeField(auto_now_add=True)
-    uid = models.CharField(max_length=100, unique=True)
+    uid = models.CharField(max_length=100)
     processed = models.BooleanField(default=False)
     processed_at = models.DateTimeField(null=True, blank=True)
+
+    category = models.CharField(max_length=100, blank=True)
+    priority_score = models.IntegerField(null=True, blank=True)
+    ai_summary = models.TextField(blank=True)
+    ai_draft_reply = models.TextField(blank=True)
+
+    class Meta:
+        unique_together = ['mailbox', 'uid']

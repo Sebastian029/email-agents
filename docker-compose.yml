@@ -2,7 +2,7 @@
 
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16
     container_name: postgres-db
     environment:
       POSTGRES_DB: appdb
@@ -13,5 +13,7 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
 
+
 volumes:
   db_data:
+
