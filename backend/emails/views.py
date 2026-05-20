@@ -224,9 +224,100 @@ class SendEmailView(APIView):
             server.send_message(msg)
             server.quit()
 
+            # >>> NOWE: zapisz wysłaną wiadomość jako EmailMessage <<<
+
+            # Uwaga: jeśli chcesz, żeby wysłane maile też były
+            # klasyfikowane/streszczane przez agentów, ustaw processed=False
+            # i odpal async_task tak jak przy odbieranych wiadomościach.
+
+            EmailMessage.objects.create(
+                mailbox=mailbox,
+                subject=data['subject'],
+                sender=mailbox.username,
+                body_text=data['body'],
+                body_html='',
+                uid=f"sent-{timezone.now().timestamp()}",
+                processed=True,              # albo False, jeśli chcesz przepuszczać przez AI
+                processed_at=timezone.now()  # opcjonalnie, skoro processed=True
+            )
+
             return Response({"status": "sent", "to": data['to']})
+
         except Exception as e:
             return Response(
                 {"error": f"SMTP error: {str(e)}"},
                 status=drf_status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+class ThreadSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, email_id):
+        try:
+            email = EmailMessage.objects.get(
+                id=email_id,
+                mailbox__user=request.user
+            )
+        except EmailMessage.DoesNotExist:
+            return Response(
+                {"error": "Email not found"},
+                status=drf_status.HTTP_404_NOT_FOUND
+            )
+
+        # Uproszczone „oczyszczenie” tematu z prefixów typu "Re: "
+        base_subject = email.subject
+        for prefix in ["Re: ", "RE: ", "Fw: ", "Fwd: ", "Odp: "]:
+            if base_subject.startswith(prefix):
+                base_subject = base_subject[len(prefix):].strip()
+
+        # Bierzemy wszystkie maile z tego samego mailboxa i z podobnym tematem
+        thread_emails = EmailMessage.objects.filter(
+            mailbox=email.mailbox,
+            subject__icontains=base_subject
+        ).order_by('received_at')
+
+        if not thread_emails.exists():
+            return Response(
+                {"error": "No emails found for this thread"},
+                status=drf_status.HTTP_404_NOT_FOUND
+            )
+
+        # Sklejamy historię rozmowy
+        conversation_text = ""
+        for msg in thread_emails:
+            conversation_text += (
+                f"OD: {msg.sender}\n"
+                f"TEMAT: {msg.subject}\n"
+                f"TREŚĆ:\n{(msg.body_text or msg.body_html)[:1000]}\n\n"
+                "----------\n\n"
+            )
+
+        from .tasks import query_ollama  # import lokalny, żeby uniknąć cykli
+
+        prompt = f"""
+            Streszcz historię mailową poniżej.
+            
+            Cel:
+            - Wyjaśnij po polsku, o czym była rozmowa między klientem a firmą.
+            - Zrób podsumowanie w 3-6 zdaniach.
+            - Uwzględnij:
+              - o co chodziło (jaki problem / temat),
+              - jakie były główne ustalenia,
+              - czy coś zostało jeszcze do zrobienia.
+            
+            Historia maili (od najstarszego do najnowszego):
+            
+            {conversation_text[:6000]}
+            """
+
+        summary = query_ollama(prompt).strip()
+
+        # Zapisujemy podsumowanie do głównego maila wątku (tego, o który pytaliśmy)
+        email.thread_summary = summary
+        email.save(update_fields=['thread_summary'])
+
+        return Response({
+            "email_id": email.id,
+            "subject": email.subject,
+            "thread_summary": summary,
+        })

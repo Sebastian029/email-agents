@@ -32,5 +32,10 @@ class EmailMessage(models.Model):
     ai_summary = models.TextField(blank=True)
     ai_draft_reply = models.TextField(blank=True)
 
+    thread_summary = models.TextField(blank=True)
+
+    class Meta:
+        unique_together = ['mailbox', 'uid']
+
     class Meta:
         unique_together = ['mailbox', 'uid']

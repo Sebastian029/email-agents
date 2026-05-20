@@ -28,9 +28,19 @@ class CreateMailboxSerializer(serializers.ModelSerializer):
 class EmailMessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = EmailMessage
-        fields = ['id', 'subject', 'sender', 'body_text', 'received_at', 'processed',  'category','priority_score',
+        fields = [
+            'id',
+            'subject',
+            'sender',
+            'body_text',
+            'received_at',
+            'processed',
+            'category',
+            'priority_score',
             'ai_summary',
-            'ai_draft_reply']
+            'ai_draft_reply',
+            'thread_summary',
+        ]
 
 class SendEmailSerializer(serializers.Serializer):
     mailbox = serializers.PrimaryKeyRelatedField(queryset=Mailbox.objects.all())

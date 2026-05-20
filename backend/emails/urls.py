@@ -16,6 +16,7 @@ urlpatterns = [
     path('list-test/', views.TestListEmailsView.as_view(), name='list_all_emails'),
     path('send/', views.SendEmailView.as_view(), name='send_email'),
     path('clear-emails/', views.ClearEmailsView.as_view(), name='clear-emails'),
+    path('thread-summary/<int:email_id>/', views.ThreadSummaryView.as_view(), name='thread-summary'),
 
 
 ]
