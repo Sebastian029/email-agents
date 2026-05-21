@@ -26,10 +26,13 @@ class CreateMailboxSerializer(serializers.ModelSerializer):
         return value
 
 class EmailMessageSerializer(serializers.ModelSerializer):
+    mailbox = serializers.PrimaryKeyRelatedField(read_only=True)
+
     class Meta:
         model = EmailMessage
         fields = [
             'id',
+            'mailbox',
             'subject',
             'sender',
             'body_text',

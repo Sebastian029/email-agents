@@ -165,15 +165,24 @@ class ListEmailsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, mailbox_id=None):
-        qs = EmailMessage.objects.filter(
-            mailbox__user=request.user,
-            processed=False
-        )
+        qs = EmailMessage.objects.filter(mailbox__user=request.user)
 
         if mailbox_id is not None:
             qs = qs.filter(mailbox_id=mailbox_id)
 
-        emails = qs.order_by('-received_at')[:50]
+        category = request.query_params.get('category')
+        if category:
+            qs = qs.filter(category=category)
+
+        processed = request.query_params.get('processed')
+        if processed is not None:
+            if processed.lower() in ('true', '1', 'yes'):
+                qs = qs.filter(processed=True)
+            elif processed.lower() in ('false', '0', 'no'):
+                qs = qs.filter(processed=False)
+
+        limit = min(int(request.query_params.get('limit', 100)), 500)
+        emails = qs.order_by('-received_at')[:limit]
         serializer = EmailMessageSerializer(emails, many=True)
         return Response(serializer.data)
 
