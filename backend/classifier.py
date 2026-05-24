@@ -47,8 +47,5 @@ def evaluate_from_csv(csv_path: str, limit: int | None = None):
 
 
 if __name__ == "__main__":
-    # Ścieżka do CSV z kolumnami: clean_text, label
-    csv_file = "twcs_labeled_500.csv"  # <-- podmień na realną ścieżkę
-
-    # Na start np. pierwsze 50 rekordów
+    csv_file = "newsgroups_labeled.csv"
     evaluate_from_csv(csv_file, limit=50)

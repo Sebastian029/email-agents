@@ -1,11 +1,10 @@
 export type EmailCategory =
-  | 'complaint'
-  | 'refund'
-  | 'technical_issue'
-  | 'account_issue'
-  | 'order_status'
-  | 'spam'
-  | 'other'
+  | 'comp.graphics'
+  | 'comp.os.ms-windows.misc'
+  | 'comp.sys.ibm.pc.hardware'
+  | 'comp.sys.mac.hardware'
+  | 'comp.windows.x'
+  | 'sci.electronics'
   | ''
 
 export interface User {

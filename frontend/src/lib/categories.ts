@@ -5,25 +5,36 @@ export const CATEGORIES: {
   label: string
   color: string
 }[] = [
-  { id: 'complaint', label: 'Skargi', color: 'bg-rose-500/20 text-rose-300' },
-  { id: 'refund', label: 'Zwroty', color: 'bg-amber-500/20 text-amber-300' },
   {
-    id: 'technical_issue',
-    label: 'Techniczne',
+    id: 'comp.graphics',
+    label: 'Grafika',
+    color: 'bg-rose-500/20 text-rose-300',
+  },
+  {
+    id: 'comp.os.ms-windows.misc',
+    label: 'Windows',
+    color: 'bg-amber-500/20 text-amber-300',
+  },
+  {
+    id: 'comp.sys.ibm.pc.hardware',
+    label: 'PC hardware',
     color: 'bg-sky-500/20 text-sky-300',
   },
   {
-    id: 'account_issue',
-    label: 'Konto',
+    id: 'comp.sys.mac.hardware',
+    label: 'Mac hardware',
     color: 'bg-violet-500/20 text-violet-300',
   },
   {
-    id: 'order_status',
-    label: 'Zamówienia',
+    id: 'comp.windows.x',
+    label: 'X Window',
     color: 'bg-emerald-500/20 text-emerald-300',
   },
-  { id: 'spam', label: 'Spam', color: 'bg-zinc-500/20 text-zinc-400' },
-  { id: 'other', label: 'Inne', color: 'bg-zinc-600/20 text-zinc-300' },
+  {
+    id: 'sci.electronics',
+    label: 'Elektronika',
+    color: 'bg-orange-500/20 text-orange-300',
+  },
 ]
 
 export function categoryLabel(cat: EmailCategory): string {

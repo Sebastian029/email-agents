@@ -2,6 +2,8 @@
 import requests
 import re
 
+from dataset_config import CATEGORIES_DESCRIPTION, DEFAULT_LABEL, NEWSGROUP_LABELS
+
 from .models import EmailMessage
 from django_q.tasks import async_task
 
@@ -34,48 +36,29 @@ def query_ollama(prompt, model="gemma3:1b"):
 #  WSPÓLNY „MÓZG” KLASIFIKACJI
 # =========================
 
-# Kategorie używane w systemie produkcyjnym (agent_classify_email)
-PROD_LABELS = [
-    "complaint",
-    "refund",
-    "technical_issue",
-    "account_issue",
-    "order_status",
-    "spam",
-    "other",
-]
+# Kategorie 20 Newsgroups (6 wybranych grup)
+PROD_LABELS = NEWSGROUP_LABELS
+
 
 def classify_email_text(text: str) -> tuple[str, int]:
     """
-    Czysta funkcja klasyfikująca treść maila.
-    Teraz używa kategorii:
-    [complaint, refund, technical_issue, account_issue, order_status, spam, other].
-
-    Zwraca:
-    - category: string z nazwą kategorii (np. 'complaint')
-    - priority: int 1–10 (nadal liczony, jeśli chcesz go używać)
+    Klasyfikuje treść do jednej z 6 kategorii 20 Newsgroups.
+    Zwraca (category, priority 1–10).
     """
 
     prompt = f"""
-Jesteś asystentem do klasyfikacji wiadomości e-mail w systemie obsługi klienta.
+Jesteś klasyfikatorem postów w stylu 20 Newsgroups (IT / elektronika).
 
-Masz do dyspozycji następujące kategorie (podaj NAZWĘ KATEGORII dokładnie jak poniżej):
-- complaint       (skarga klienta)
-- refund          (zwrot pieniędzy)
-- technical_issue (problem techniczny)
-- account_issue   (logowanie / konto)
-- order_status    (status zamówienia / paczki)
-- spam            (spam / nieistotne)
-- other           (inne pytania)
+Kategorie (podaj NAZWĘ dokładnie jak poniżej):
+{CATEGORIES_DESCRIPTION}
 
-Przeanalizuj treść wiadomości poniżej i zwróć TYLKO:
+Przeanalizuj treść poniżej i zwróć TYLKO:
 KATEGORIA | PRIORYTET
 
-gdzie:
-- KATEGORIA to jedna z powyższych nazw (np. complaint, refund, technical_issue)
-- PRIORYTET to liczba od 1 do 10 (10 = najważniejsze)
+gdzie KATEGORIA to jedna z powyższych nazw (np. comp.graphics, sci.electronics),
+a PRIORYTET to liczba 1–10.
 
-Treść wiadomości:
+Treść:
 {text[:2000]}
 """
 
@@ -92,23 +75,16 @@ Treść wiadomości:
 
     parts = clean_response.split("|")
 
-    # Domyślne wartości
-    category = "other"
+    category = DEFAULT_LABEL
     priority = 5
 
     if len(parts) >= 2:
-        # Kategoria (po lewej stronie)
-        cat = parts[0].strip()
-        cat_lower = cat.lower()
+        cat_lower = parts[0].strip().lower()
 
-        # Spróbuj dopasować do znanych etykiet
-        for label in PROD_LABELS:
+        for label in sorted(PROD_LABELS, key=len, reverse=True):
             if label in cat_lower:
                 category = label
                 break
-        else:
-            # jeśli model coś dziwnego zwróci, zostaw domyślne "other"
-            pass
 
         # Priorytet – pierwsza liczba w drugiej części
         try:

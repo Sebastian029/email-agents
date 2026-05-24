@@ -15,31 +15,14 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "DjangoProject.settings")
 django.setup()
 
 from emails.tasks import query_ollama
+from dataset_config import CATEGORIES_DESCRIPTION, DEFAULT_LABEL, NEWSGROUP_LABELS
 
 
 # =========================
 #  WSPÓLNE DEFINICJE
 # =========================
 
-LABELS = [
-    "complaint",
-    "refund",
-    "technical_issue",
-    "account_issue",
-    "order_status",
-    "spam",
-    "other",
-]
-
-CATEGORIES_DESCRIPTION = """
-- complaint (skarga klienta)
-- refund (zwrot pieniędzy)
-- technical_issue (problem techniczny)
-- account_issue (logowanie / konto)
-- order_status (status zamówienia / paczki)
-- spam (spam / nieistotne)
-- other (inne pytania)
-"""
+LABELS = NEWSGROUP_LABELS
 
 # MODELE DO TESTÓW
 MODELS = [
@@ -74,12 +57,12 @@ def _parse_category_priority(raw_response: str) -> Tuple[str, int]:
 
     parts = clean.split("|")
 
-    category = "other"
+    category = DEFAULT_LABEL
     priority = 5
 
     if len(parts) >= 2:
         cat_part = parts[0].strip().lower()
-        for label in LABELS:
+        for label in sorted(LABELS, key=len, reverse=True):
             if label in cat_part:
                 category = label
                 break
@@ -103,7 +86,7 @@ def classify_simple(text: str, model: str) -> Tuple[str, int]:
     Podstawowy, najprostszy prompt.
     """
     prompt = f"""
-Masz zaklasyfikować poniższy e-mail klienta do jednej z kategorii oraz ocenić priorytet.
+Zaklasyfikuj poniższy post z grupy dyskusyjnej do jednej kategorii newsgroup oraz oceń priorytet.
 
 Kategorie (podaj nazwę dokładnie w takiej formie):
 {CATEGORIES_DESCRIPTION}
@@ -123,13 +106,13 @@ def classify_medium(text: str, model: str) -> Tuple[str, int]:
     Średnio rozbudowany prompt: trochę więcej opisu, ale nadal zwięzły.
     """
     prompt = f"""
-Jesteś asystentem działu obsługi klienta.
+Jesteś klasyfikatorem postów z grup dyskusyjnych (20 Newsgroups).
 
 Twoje zadanie:
-1. Przeczytaj treść e-maila.
-2. Zastanów się, jaki jest główny temat wiadomości.
+1. Przeczytaj treść posta.
+2. Określ główny temat (sprzęt, system, grafika, elektronika).
 3. Wybierz NAJBARDZIEJ pasującą kategorię z listy.
-4. Oceń priorytet sprawy w skali 1–10 (10 = bardzo pilne).
+4. Oceń priorytet w skali 1–10 (10 = bardzo istotny / pilny wątek).
 
 Kategorie:
 {CATEGORIES_DESCRIPTION}
@@ -138,9 +121,9 @@ Zwróć TYLKO wynik w formacie:
 KATEGORIA | PRIORYTET
 
 Przykład:
-complaint | 9
+comp.graphics | 7
 
-Treść wiadomości:
+Treść:
 {text[:2000]}
 """
     raw = _call_llm(prompt, model)
@@ -152,37 +135,31 @@ def classify_detailed(text: str, model: str) -> Tuple[str, int]:
     Szczegółowy prompt z dokładnym opisem każdej kategorii i priorytetu.
     """
     prompt = f"""
-Jesteś ekspertem ds. obsługi klienta w dużej firmie e-commerce.
+Jesteś ekspertem od klasyfikacji postów w stylu 20 Newsgroups (tematyka IT i elektroniki).
 
 Twoim zadaniem jest:
-- przypisać e-mail klienta do jednej z kategorii wsparcia,
-- określić pilność sprawy w skali 1–10.
+- przypisać post do jednej kategorii newsgroup,
+- określić pilność / istotność wątku w skali 1–10.
 
 Kategorie i ich znaczenie:
-- complaint       (skarga klienta: niezadowolenie, groźba rezygnacji, żądanie interwencji)
-- refund          (prośba o zwrot pieniędzy, korekta płatności, chargeback)
-- technical_issue (problem techniczny z produktem, stroną, aplikacją, logowaniem)
-- account_issue   (problem z kontem klienta: dane, logowanie, blokada, zmiana hasła)
-- order_status    (pytania o status zamówienia, numer śledzenia, dostawę)
-- spam            (spam, reklama niezwiązana z obsługą klienta, treści bez znaczenia)
-- other           (wszystko inne: ogólne pytania, sugestie, informacje)
+{CATEGORIES_DESCRIPTION}
 
 Priorytet:
-- 10: bardzo pilne (groźba zgłoszenia do instytucji, duża szkoda dla klienta, poważny błąd)
-- 7–9: ważne problemy (produkt nie działa, klient nie może korzystać z usługi, problemy z płatnością)
-- 4–6: normalne sprawy (pytania o zamówienie, fakturę, konfigurację)
-- 1–3: mało pilne (spam, oferty, ciekawostki, drobne uwagi)
+- 10: krytyczny problem sprzętowy, awaria, pilna prośba o pomoc
+- 7–9: ważne pytanie techniczne, konfiguracja, porównanie sprzętu
+- 4–6: zwykła dyskusja, porada, recenzja
+- 1–3: luźna wymiana, off-topic w obrębie grupy
 
 Instrukcja:
-1. Przeanalizuj treść e-maila.
-2. Wybierz dokładnie jedną kategorię z listy (nazwę w formie: complaint, refund, itd.).
-3. Ustal liczbę od 1 do 10 zgodnie z powyższym opisem pilności.
-4. NIE pisz wyjaśnienia, NIE dodawaj komentarza.
+1. Przeanalizuj treść posta.
+2. Wybierz dokładnie jedną kategorię (np. comp.graphics, sci.electronics).
+3. Ustal liczbę od 1 do 10.
+4. NIE pisz wyjaśnienia.
 
 Zwróć TYLKO:
 KATEGORIA | PRIORYTET
 
-Treść wiadomości:
+Treść:
 {text[:2000]}
 """
     raw = _call_llm(prompt, model)
@@ -369,7 +346,7 @@ def run_grid(csv_path: str, max_samples: int = MAX_SAMPLES_PER_COMBO):
 
 
 if __name__ == "__main__":
-    CSV_PATH = "twcs_labeled.csv"
+    CSV_PATH = "newsgroups_labeled.csv"
 
     run_grid(CSV_PATH, max_samples=MAX_SAMPLES_PER_COMBO)
     print("\nWyniki zapisane w pliku: llm_grid_results.csv")

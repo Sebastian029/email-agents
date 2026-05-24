@@ -1,27 +1,22 @@
-﻿import pandas as pd
+﻿"""
+Przygotowanie zbioru etykietowanego z The 20 Newsgroups (6 kategorii).
+Etykiety pochodzą z datasetu (ground truth), bez labelowania przez LLM.
+"""
+
 import re
-import requests
-import time
 
-# =========================
-# 1. Wczytanie datasetu
-# =========================
+import pandas as pd
+from sklearn.datasets import fetch_20newsgroups
 
-df = pd.read_csv("twcs.csv")
+from dataset_config import NEWSGROUP_LABELS
 
-print("Liczba rekordów:", len(df))
+LABELED_CSV = "newsgroups_labeled.csv"
+DISTRIBUTION_CSV = "class_distribution.csv"
+SAMPLE_SIZE = 500
+RANDOM_STATE = 42
 
-# tylko wiadomości klientów
-df = df[df["inbound"] == True]
-df = df[df["text"].notna()]
 
-print("Po filtrze inbound:", len(df))
-
-# =========================
-# 2. Czyszczenie tekstu
-# =========================
-
-def clean_text(text):
+def clean_text(text: str) -> str:
     text = str(text)
     text = re.sub(r"http\S+", "", text)
     text = re.sub(r"@\w+", "", text)
@@ -29,132 +24,52 @@ def clean_text(text):
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
-df["clean_text"] = df["text"].apply(clean_text)
 
-df = df[df["clean_text"].str.len() > 15]
-
-# =========================
-# 3. Sample 500 rekordów
-# =========================
-
-df_sample = df.sample(500, random_state=42).copy()
-
-# =========================
-# 4. Prompt do Ollamy
-# =========================
-
-CATEGORIES = """
-- complaint (skarga klienta)
-- refund (zwrot pieniędzy)
-- technical_issue (problem techniczny)
-- account_issue (logowanie / konto)
-- order_status (status zamówienia / paczki)
-- spam (spam / nieistotne)
-- other (inne pytania)
-"""
-
-def classify_with_ollama(text):
-    prompt = f"""
-You are a strict customer support text classifier.
-
-Classify the message into EXACTLY ONE category:
-
-{CATEGORIES}
-
-Return ONLY the label, nothing else.
-
-Message:
-\"\"\"{text}\"\"\"
-"""
-
-    response = requests.post(
-        "http://localhost:11434/api/generate",
-        json={
-            "model": "llama3.1:8b",
-            "prompt": prompt,
-            "stream": False
-        }
+def load_newsgroups_subset():
+    data = fetch_20newsgroups(
+        subset="all",
+        categories=NEWSGROUP_LABELS,
+        remove=("headers", "footers", "quotes"),
+        shuffle=True,
+        random_state=RANDOM_STATE,
     )
+    rows = []
+    for text, target in zip(data.data, data.target):
+        label = data.target_names[target]
+        cleaned = clean_text(text)
+        if len(cleaned) > 15:
+            rows.append({"clean_text": cleaned, "label": label})
+    return pd.DataFrame(rows)
 
-    result = response.json()["response"].strip().lower()
 
-    # fallback sanity check
-    valid_labels = [
-        "complaint",
-        "refund",
-        "technical_issue",
-        "account_issue",
-        "order_status",
-        "spam",
-        "other"
-    ]
+def main():
+    print("Ładowanie The 20 Newsgroups (6 kategorii)...")
+    df = load_newsgroups_subset()
+    print(f"Liczba rekordów po czyszczeniu: {len(df)}")
 
-    for label in valid_labels:
-        if label in result:
-            return label
+    n = min(SAMPLE_SIZE, len(df))
+    df_sample = df.sample(n, random_state=RANDOM_STATE).copy()
+    df_sample.to_csv(LABELED_CSV, index=False)
+    print(f"\nZapisano: {LABELED_CSV} ({n} wierszy)")
 
-    return "other"
+    print("\n===== PODSUMOWANIE KLAS =====\n")
+    class_counts = df_sample["label"].value_counts()
+    print(class_counts)
 
-# =========================
-# 5. Labelowanie
-# =========================
+    print("\n===== PROCENTOWY ROZKŁAD =====\n")
+    class_percent = df_sample["label"].value_counts(normalize=True) * 100
+    print(class_percent.round(2))
 
-labels = []
+    summary_df = pd.DataFrame({
+        "count": class_counts,
+        "percent": class_percent.round(2),
+    })
+    print("\n===== TABELA PODSUMOWUJĄCA =====\n")
+    print(summary_df)
 
-for i, row in enumerate(df_sample["clean_text"]):
-    try:
-        label = classify_with_ollama(row)
-        labels.append(label)
+    summary_df.to_csv(DISTRIBUTION_CSV)
+    print(f"\nZapisano: {DISTRIBUTION_CSV}")
 
-        print(f"[{i+1}/500] {label} | {row[:60]}")
 
-        time.sleep(0.2)  # lekkie throttling
-
-    except Exception as e:
-        print("Błąd:", e)
-        labels.append("other")
-
-df_sample["label"] = labels
-
-# =========================
-# 6. Zapis wyniku
-# =========================
-
-df_sample.to_csv("twcs_labeled.csv", index=False)
-
-print("\nZapisano: twcs_labeled_500.csv")
-
-# =========================
-# 7. Podsumowanie klas
-# =========================
-
-print("\n===== PODSUMOWANIE KLAS =====\n")
-
-class_counts = df_sample["label"].value_counts()
-
-print(class_counts)
-
-print("\n===== PROCENTOWY ROZKŁAD =====\n")
-
-class_percent = df_sample["label"].value_counts(normalize=True) * 100
-print(class_percent.round(2))
-
-# =========================
-# 8. Ładna tabela (opcjonalnie)
-# =========================
-
-summary_df = pd.DataFrame({
-    "count": class_counts,
-    "percent": class_percent.round(2)
-})
-
-print("\n===== TABELA PODSUMOWUJĄCA =====\n")
-print(summary_df)
-
-# =========================
-# 9. Zapis statystyk
-# =========================
-
-summary_df.to_csv("class_distribution.csv")
-
-print("\nZapisano: class_distribution.csv")
+if __name__ == "__main__":
+    main()
