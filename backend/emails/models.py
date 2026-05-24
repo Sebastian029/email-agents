@@ -19,13 +19,18 @@ class Mailbox(models.Model):
 class EmailMessage(models.Model):
     mailbox = models.ForeignKey(Mailbox, on_delete=models.CASCADE)
     subject = models.TextField()
-    sender = models.EmailField()
+    sender = models.CharField(max_length=500)
     body_text = models.TextField()
     body_html = models.TextField(blank=True)
     received_at = models.DateTimeField(auto_now_add=True)
     uid = models.CharField(max_length=100)
     processed = models.BooleanField(default=False)
     processed_at = models.DateTimeField(null=True, blank=True)
+
+    message_id = models.CharField(max_length=500, blank=True, db_index=True)
+    in_reply_to = models.CharField(max_length=500, blank=True)
+    references = models.TextField(blank=True)
+    thread_id = models.CharField(max_length=500, blank=True, db_index=True)
 
     category = models.CharField(max_length=100, blank=True)
     priority_score = models.IntegerField(null=True, blank=True)
@@ -34,8 +39,7 @@ class EmailMessage(models.Model):
 
     thread_summary = models.TextField(blank=True)
 
-    class Meta:
-        unique_together = ['mailbox', 'uid']
+    is_hidden = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         unique_together = ['mailbox', 'uid']

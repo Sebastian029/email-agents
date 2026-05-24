@@ -1,11 +1,12 @@
 ﻿import imaplib
-import email
+import uuid
 from email import policy
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import smtplib
 from email.parser import BytesParser
 
+from django.db.models import Count
 from django.utils import timezone
 
 from rest_framework import viewsets
@@ -21,16 +22,22 @@ from .serializers import (
     MailboxSerializer,
     CreateMailboxSerializer,
 )
+from .threading import (
+    collapse_to_latest_per_thread,
+    extract_message_id,
+    get_thread_messages,
+    parse_email_date,
+    parse_references,
+    resolve_thread_id,
+)
 from django_q.tasks import async_task
-
-
 
 
 def parse_email_message(raw_bytes):
     msg = BytesParser(policy=policy.default).parsebytes(raw_bytes)
 
-    subject = msg.get('Subject', '')
-    sender = msg.get('From', '')
+    subject = msg.get('Subject', '') or ''
+    sender = msg.get('From', '') or ''
     body_text = ''
     body_html = ''
 
@@ -42,7 +49,51 @@ def parse_email_message(raw_bytes):
     if body_part_html:
         body_html = body_part_html.get_content()
 
-    return subject, sender, body_text, body_html
+    message_id = extract_message_id(msg.get('Message-ID', ''))
+    in_reply_to = extract_message_id(msg.get('In-Reply-To', ''))
+    references = msg.get('References', '') or ''
+    received_at = parse_email_date(msg)
+
+    return {
+        'subject': subject,
+        'sender': sender,
+        'body_text': body_text,
+        'body_html': body_html,
+        'message_id': message_id,
+        'in_reply_to': in_reply_to,
+        'references': references,
+        'received_at': received_at,
+    }
+
+
+def _thread_counts_for_emails(emails, include_hidden: bool = False):
+    thread_ids = {e.thread_id for e in emails if e.thread_id}
+    if not thread_ids:
+        return {}
+    qs = EmailMessage.objects.filter(thread_id__in=thread_ids)
+    if not include_hidden:
+        qs = qs.filter(is_hidden=False)
+    rows = qs.values('thread_id').annotate(count=Count('id'))
+    return {row['thread_id']: row['count'] for row in rows}
+
+
+def _get_user_email(request, email_id):
+    try:
+        return EmailMessage.objects.get(
+            id=email_id,
+            mailbox__user=request.user,
+        )
+    except EmailMessage.DoesNotExist:
+        return None
+
+
+def _queryset_for_user(request, mailbox_id=None, include_hidden=False):
+    qs = EmailMessage.objects.filter(mailbox__user=request.user)
+    if mailbox_id is not None:
+        qs = qs.filter(mailbox_id=mailbox_id)
+    if not include_hidden:
+        qs = qs.filter(is_hidden=False)
+    return qs
 
 
 class MailboxViewSet(viewsets.ModelViewSet):
@@ -72,51 +123,98 @@ class FetchEmailsView(APIView):
         try:
             mail = imaplib.IMAP4_SSL(mailbox.imap_host, mailbox.imap_port)
             mail.login(mailbox.username, mailbox.password)
-            mail.select('INBOX')
 
-            status, messages = mail.search(None, 'ALL')
+            # 1. POBIERZ LISTĘ WSZYSTKICH FOLDERÓW
+            status, folders = mail.list()
             if status != 'OK':
                 return 0
 
-            uids = messages[0].split()
-            if not uids:
-                mail.logout()
-                return 0
+            # 2. ITERUJ PO KAŻDYM FOLDERZE
+            for folder_data in folders:
+                # folder_data wygląda np. tak: b'(\\HasNoChildren) "/" "INBOX"'
+                # Musimy wyciągnąć samą nazwę folderu (zwykle na końcu, w cudzysłowach)
+                folder_str = folder_data.decode()
+                folder_name = folder_str.split(' "/" ')[-1]
 
-            for uid in uids[-50:]:
-                uid_str = uid.decode()
+                # Jeśli nazwa nie ma cudzysłowów, na Wp.pl może to być też podział spacją
+                if '"' in folder_name:
+                    folder_name = folder_name.strip('"')
 
-                # TYMCZASOWO ZAKOMENTOWANE NA POTRZEBY TESTÓW:
-                # if EmailMessage.objects.filter(mailbox=mailbox, uid=uid_str).exists():
-                #     continue
-
-                status, msg_data = mail.fetch(uid, '(RFC822)')
-                if status != 'OK' or not msg_data:
+                # Pomiń foldery typu Kosz / Spam, jeśli nie chcesz ich analizować
+                if any(skip in folder_name.lower() for skip in ['trash', 'kosz', 'spam']):
                     continue
 
-                raw_email = msg_data[0][1]
-                subject, sender, body_text, body_html = parse_email_message(raw_email)
+                # 3. WYBIERZ AKTUALNY FOLDER
+                status, _ = mail.select(f'"{folder_name}"', readonly=True)
+                if status != 'OK':
+                    continue
 
-                # Używamy update_or_create, aby zresetować stan e-maila przy każdym fetchu
-                new_email, created = EmailMessage.objects.update_or_create(
-                    mailbox=mailbox,
-                    uid=uid_str,
-                    defaults={
-                        'subject': subject,
-                        'sender': sender,
-                        'body_text': body_text,
-                        'body_html': body_html,
-                        'processed': False,  # Resetujemy status przetwarzania
-                        'category': '',  # Czyścimy starą kategorię
-                        'ai_summary': '',  # Czyścimy stare streszczenie
-                        'ai_draft_reply': '',  # Czyścimy stary draft
-                        'priority_score': None,  # Resetujemy priorytet
-                        'received_at': timezone.now()  # Aktualizujemy czas (opcjonalnie)
+                status, messages = mail.search(None, 'ALL')
+                if status != 'OK':
+                    continue
+
+                uids = messages[0].split()
+                if not uids:
+                    continue
+
+                # 4. POBIERANIE WIADOMOŚCI DLA DANEGO FOLDERU
+                for uid in uids[-50:]:  # Pobierasz ostatnie 50 z każdego folderu
+                    uid_str = f"{folder_name}-{uid.decode()}" # WAŻNE: Dodaj nazwę folderu do UID!
+
+                    # Reszta Twojego kodu pobierającego e-maile
+                    # (upewnij się, że uid w fetch to wciąż oryginalne `uid`, a nie `uid_str`)
+                    status, msg_data = mail.fetch(uid, '(RFC822)')
+                    if status != 'OK' or not msg_data:
+                        continue
+
+                    raw_email = msg_data[0][1]
+                    parsed = parse_email_message(raw_email)
+
+                    thread_id = resolve_thread_id(
+                        mailbox.id,
+                        parsed['message_id'],
+                        parsed['in_reply_to'],
+                        parsed['references'],
+                        parsed['subject'],
+                    )
+
+                    existing = EmailMessage.objects.filter(
+                        mailbox=mailbox,
+                        uid=uid_str,  # Używasz zmodyfikowanego UID
+                    ).first()
+
+                    defaults = {
+                        'subject': parsed['subject'],
+                        'sender': parsed['sender'],
+                        'body_text': parsed['body_text'],
+                        'body_html': parsed['body_html'],
+                        'message_id': parsed['message_id'],
+                        'in_reply_to': parsed['in_reply_to'],
+                        'references': parsed['references'],
+                        'thread_id': thread_id,
+                        'received_at': parsed['received_at'],
                     }
-                )
-                count += 1
 
-                async_task('emails.tasks.agent_classify_email', new_email.id)
+                    if not existing:
+                        defaults.update({
+                            'processed': False,
+                            'category': '',
+                            'ai_summary': '',
+                            'ai_draft_reply': '',
+                            'priority_score': None,
+                        })
+
+                    new_email, created = EmailMessage.objects.update_or_create(
+                        mailbox=mailbox,
+                        uid=uid_str,
+                        defaults=defaults,
+                    )
+
+                    if created:
+                        count += 1
+
+                    if created or not existing or not existing.processed:
+                        async_task('emails.tasks.agent_classify_email', new_email.id)
 
             mail.logout()
         except Exception as e:
@@ -165,10 +263,10 @@ class ListEmailsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, mailbox_id=None):
-        qs = EmailMessage.objects.filter(mailbox__user=request.user)
-
-        if mailbox_id is not None:
-            qs = qs.filter(mailbox_id=mailbox_id)
+        include_hidden = request.query_params.get('include_hidden', '').lower() in (
+            'true', '1', 'yes',
+        )
+        qs = _queryset_for_user(request, mailbox_id, include_hidden=include_hidden)
 
         category = request.query_params.get('category')
         if category:
@@ -182,8 +280,20 @@ class ListEmailsView(APIView):
                 qs = qs.filter(processed=False)
 
         limit = min(int(request.query_params.get('limit', 100)), 500)
-        emails = qs.order_by('-received_at')[:limit]
-        serializer = EmailMessageSerializer(emails, many=True)
+        # Pobierz więcej rekordów, potem zostaw po jednym (najnowszym) na wątek
+        fetch_limit = min(limit * 8, 2000)
+        emails = list(qs.order_by('-received_at')[:fetch_limit])
+        threads = collapse_to_latest_per_thread(emails)[:limit]
+        serializer = EmailMessageSerializer(
+            threads,
+            many=True,
+            context={
+                'thread_counts': _thread_counts_for_emails(
+                    threads,
+                    include_hidden=include_hidden,
+                ),
+            },
+        )
         return Response(serializer.data)
 
 
@@ -217,11 +327,32 @@ class SendEmailView(APIView):
             )
 
         data = serializer.validated_data
+        parent = None
+        reply_id = data.get('reply_to_email_id')
+        if reply_id:
+            parent = EmailMessage.objects.filter(
+                id=reply_id,
+                mailbox=mailbox,
+            ).first()
+
+        new_message_id = f'{uuid.uuid4()}@{mailbox.username.split("@")[-1]}'
+        references_parts = []
+        if parent:
+            if parent.references:
+                references_parts.extend(parse_references(parent.references))
+            if parent.message_id:
+                references_parts.append(parent.message_id)
+        references_header = ' '.join(f'<{mid}>' for mid in references_parts if mid)
 
         msg = MIMEMultipart()
         msg['From'] = mailbox.username
         msg['To'] = data['to']
         msg['Subject'] = data['subject']
+        msg['Message-ID'] = f'<{new_message_id}>'
+        if parent and parent.message_id:
+            msg['In-Reply-To'] = f'<{parent.message_id}>'
+        if references_header:
+            msg['References'] = references_header
         msg.attach(MIMEText(data['body'], 'plain'))
 
         try:
@@ -233,11 +364,10 @@ class SendEmailView(APIView):
             server.send_message(msg)
             server.quit()
 
-            # >>> NOWE: zapisz wysłaną wiadomość jako EmailMessage <<<
-
-            # Uwaga: jeśli chcesz, żeby wysłane maile też były
-            # klasyfikowane/streszczane przez agentów, ustaw processed=False
-            # i odpal async_task tak jak przy odbieranych wiadomościach.
+            thread_id = parent.thread_id if parent and parent.thread_id else f'mid:{new_message_id}'
+            if parent and not parent.thread_id:
+                parent.thread_id = thread_id
+                parent.save(update_fields=['thread_id'])
 
             EmailMessage.objects.create(
                 mailbox=mailbox,
@@ -245,9 +375,13 @@ class SendEmailView(APIView):
                 sender=mailbox.username,
                 body_text=data['body'],
                 body_html='',
-                uid=f"sent-{timezone.now().timestamp()}",
-                processed=True,              # albo False, jeśli chcesz przepuszczać przez AI
-                processed_at=timezone.now()  # opcjonalnie, skoro processed=True
+                uid=f'sent-{timezone.now().timestamp()}',
+                message_id=new_message_id,
+                in_reply_to=parent.message_id if parent else '',
+                references=references_header,
+                thread_id=thread_id,
+                processed=True,
+                processed_at=timezone.now(),
             )
 
             return Response({"status": "sent", "to": data['to']})
@@ -257,6 +391,145 @@ class SendEmailView(APIView):
                 {"error": f"SMTP error: {str(e)}"},
                 status=drf_status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+class EmailThreadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, email_id):
+        email = _get_user_email(request, email_id)
+        if not email:
+            return Response(
+                {"error": "Email not found"},
+                status=drf_status.HTTP_404_NOT_FOUND,
+            )
+
+        include_hidden = request.query_params.get('include_hidden', '').lower() in (
+            'true', '1', 'yes',
+        )
+        thread_emails = get_thread_messages(email, include_hidden=include_hidden)
+        serializer = EmailMessageSerializer(thread_emails, many=True)
+        return Response({
+            "email_id": email.id,
+            "thread_id": email.thread_id,
+            "messages": serializer.data,
+        })
+
+
+class HideEmailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, email_id):
+        email = _get_user_email(request, email_id)
+        if not email:
+            return Response({"error": "Email not found"}, status=drf_status.HTTP_404_NOT_FOUND)
+        email.is_hidden = True
+        email.save(update_fields=['is_hidden'])
+        return Response({"status": "hidden", "email_id": email.id})
+
+
+class UnhideEmailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, email_id):
+        email = EmailMessage.objects.filter(
+            id=email_id,
+            mailbox__user=request.user,
+        ).first()
+        if not email:
+            return Response({"error": "Email not found"}, status=drf_status.HTTP_404_NOT_FOUND)
+        email.is_hidden = False
+        email.save(update_fields=['is_hidden'])
+        return Response({"status": "visible", "email_id": email.id})
+
+
+class DeleteEmailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, email_id):
+        email = _get_user_email(request, email_id)
+        if not email:
+            return Response({"error": "Email not found"}, status=drf_status.HTTP_404_NOT_FOUND)
+        deleted_id = email.id
+        email.delete()
+        return Response({"status": "deleted", "email_id": deleted_id})
+
+
+class HideThreadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, email_id):
+        email = _get_user_email(request, email_id)
+        if not email:
+            return Response({"error": "Email not found"}, status=drf_status.HTTP_404_NOT_FOUND)
+
+        if email.thread_id:
+            updated = EmailMessage.objects.filter(
+                mailbox=email.mailbox,
+                thread_id=email.thread_id,
+            ).update(is_hidden=True)
+        else:
+            email.is_hidden = True
+            email.save(update_fields=['is_hidden'])
+            updated = 1
+
+        return Response({
+            "status": "hidden",
+            "thread_id": email.thread_id,
+            "updated_count": updated,
+        })
+
+
+class UnhideThreadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, email_id):
+        email = EmailMessage.objects.filter(
+            id=email_id,
+            mailbox__user=request.user,
+        ).first()
+        if not email:
+            return Response({"error": "Email not found"}, status=drf_status.HTTP_404_NOT_FOUND)
+
+        if email.thread_id:
+            updated = EmailMessage.objects.filter(
+                mailbox=email.mailbox,
+                thread_id=email.thread_id,
+            ).update(is_hidden=False)
+        else:
+            email.is_hidden = False
+            email.save(update_fields=['is_hidden'])
+            updated = 1
+
+        return Response({
+            "status": "visible",
+            "thread_id": email.thread_id,
+            "updated_count": updated,
+        })
+
+
+class DeleteThreadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, email_id):
+        email = _get_user_email(request, email_id)
+        if not email:
+            return Response({"error": "Email not found"}, status=drf_status.HTTP_404_NOT_FOUND)
+
+        if email.thread_id:
+            qs = EmailMessage.objects.filter(
+                mailbox=email.mailbox,
+                thread_id=email.thread_id,
+            )
+        else:
+            qs = EmailMessage.objects.filter(pk=email.pk)
+
+        deleted_count, _ = qs.delete()
+        return Response({
+            "status": "deleted",
+            "thread_id": email.thread_id,
+            "deleted_count": deleted_count,
+        })
+
 
 class ThreadSummaryView(APIView):
     permission_classes = [IsAuthenticated]
@@ -273,25 +546,14 @@ class ThreadSummaryView(APIView):
                 status=drf_status.HTTP_404_NOT_FOUND
             )
 
-        # Uproszczone „oczyszczenie” tematu z prefixów typu "Re: "
-        base_subject = email.subject
-        for prefix in ["Re: ", "RE: ", "Fw: ", "Fwd: ", "Odp: "]:
-            if base_subject.startswith(prefix):
-                base_subject = base_subject[len(prefix):].strip()
+        thread_emails = get_thread_messages(email)
 
-        # Bierzemy wszystkie maile z tego samego mailboxa i z podobnym tematem
-        thread_emails = EmailMessage.objects.filter(
-            mailbox=email.mailbox,
-            subject__icontains=base_subject
-        ).order_by('received_at')
-
-        if not thread_emails.exists():
+        if not thread_emails:
             return Response(
                 {"error": "No emails found for this thread"},
                 status=drf_status.HTTP_404_NOT_FOUND
             )
 
-        # Sklejamy historię rozmowy
         conversation_text = ""
         for msg in thread_emails:
             conversation_text += (

@@ -17,6 +17,7 @@ export function InboxPage() {
   const [fetching, setFetching] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fetchMsg, setFetchMsg] = useState<string | null>(null)
+  const [showHidden, setShowHidden] = useState(false)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -26,6 +27,7 @@ export function InboxPage() {
         emailsApi.fetchMailboxes(),
         emailsApi.listEmails({
           mailboxId: mailboxFilter === 'all' ? undefined : mailboxFilter,
+          includeHidden: showHidden,
         }),
       ])
       setMailboxes(mbList)
@@ -42,12 +44,13 @@ export function InboxPage() {
     } finally {
       setLoading(false)
     }
-  }, [mailboxFilter])
+  }, [mailboxFilter, showHidden])
 
   const loadEmails = useCallback(async () => {
     try {
       const emailList = await emailsApi.listEmails({
         mailboxId: mailboxFilter === 'all' ? undefined : mailboxFilter,
+        includeHidden: showHidden,
       })
       setEmails(emailList)
       setSelectedId((prev) => {
@@ -57,7 +60,7 @@ export function InboxPage() {
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Błąd ładowania maili')
     }
-  }, [mailboxFilter])
+  }, [mailboxFilter, showHidden])
 
   useEffect(() => {
     loadData()
@@ -65,7 +68,12 @@ export function InboxPage() {
 
   useEffect(() => {
     if (!loading) loadEmails()
-  }, [mailboxFilter, loading, loadEmails])
+  }, [mailboxFilter, showHidden, loading, loadEmails])
+
+  const handleRemoved = useCallback(() => {
+    setSelectedId(null)
+    loadEmails()
+  }, [loadEmails])
 
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = { all: emails.length }
@@ -148,6 +156,17 @@ export function InboxPage() {
           >
             Odśwież
           </button>
+          <button
+            type="button"
+            onClick={() => setShowHidden((v) => !v)}
+            className={`rounded-lg border px-3 py-1.5 text-sm transition ${
+              showHidden
+                ? 'border-amber-600/60 bg-amber-950/30 text-amber-300'
+                : 'border-zinc-700/80 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200'
+            }`}
+          >
+            {showHidden ? 'Ukryte' : 'Pokaż ukryte'}
+          </button>
         </div>
       </header>
 
@@ -198,7 +217,7 @@ export function InboxPage() {
             ) : (
               <ul>
                 {filteredEmails.map((email) => (
-                  <li key={email.id}>
+                  <li key={email.thread_id || `single-${email.id}`}>
                     <button
                       type="button"
                       onClick={() => setSelectedId(email.id)}
@@ -212,13 +231,34 @@ export function InboxPage() {
                         <span className="line-clamp-1 text-sm font-medium text-zinc-200">
                           {email.subject || '(bez tematu)'}
                         </span>
-                        {!email.processed && (
-                          <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" title="Przetwarzanie" />
-                        )}
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {(email.thread_message_count ?? 1) > 1 && (
+                            <span
+                              className="rounded bg-zinc-700/80 px-1.5 py-0.5 text-[10px] text-zinc-400"
+                              title="Liczba wiadomości w wątku"
+                            >
+                              {email.thread_message_count}
+                            </span>
+                          )}
+                          {!email.processed && (
+                            <span className="h-2 w-2 rounded-full bg-amber-400" title="Przetwarzanie" />
+                          )}
+                        </div>
                       </div>
                       <p className="mt-0.5 line-clamp-1 text-xs text-zinc-500">
                         {email.sender}
+                        {(email.thread_message_count ?? 1) > 1 && (
+                          <span className="text-zinc-600">
+                            {' · '}
+                            {email.thread_message_count} w wątku
+                          </span>
+                        )}
                       </p>
+                      {email.body_text && (
+                        <p className="mt-1 line-clamp-2 text-xs text-zinc-600">
+                          {email.body_text}
+                        </p>
+                      )}
                       <div className="mt-1.5 flex items-center gap-2">
                         <span
                           className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${categoryColor(email.category)}`}
@@ -240,7 +280,12 @@ export function InboxPage() {
         </div>
 
         <div className="min-w-0 flex-1">
-          <EmailDetail email={selected} onSent={loadEmails} />
+          <EmailDetail
+            email={selected}
+            showHidden={showHidden}
+            onSent={loadEmails}
+            onRemoved={handleRemoved}
+          />
         </div>
       </div>
     </div>

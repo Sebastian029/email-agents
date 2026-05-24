@@ -47,6 +47,15 @@ export interface EmailMessage {
   ai_summary: string
   ai_draft_reply: string
   thread_summary: string
+  thread_id: string
+  thread_message_count: number
+  is_hidden?: boolean
+}
+
+export interface EmailThreadResponse {
+  email_id: number
+  thread_id: string
+  messages: EmailMessage[]
 }
 
 export interface TokenPair {
