@@ -97,7 +97,6 @@ def get_thread_messages(email: EmailMessage, include_hidden: bool = False):
 
 
 def collapse_to_latest_per_thread(emails):
-    """Keep newest visible message per thread (input should be newest-first)."""
     seen = {}
     for email in emails:
         key = thread_key(email)

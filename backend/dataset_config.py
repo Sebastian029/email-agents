@@ -1,5 +1,3 @@
-"""20 Newsgroups — 6 wybranych kategorii (comp.* + sci.electronics)."""
-
 NEWSGROUP_LABELS = [
     "comp.graphics",
     "comp.os.ms-windows.misc",

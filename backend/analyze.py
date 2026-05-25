@@ -5,14 +5,11 @@ from sklearn.metrics import confusion_matrix, classification_report
 
 
 def analyze_llm_results(csv_path: str):
-    # Wczytanie danych
     df = pd.read_csv(csv_path)
 
-    # Oddzielenie podsumowań (metryk) od pojedynczych predykcji
     summary_df = df[df['row_index'] == -1].copy()
     predictions_df = df[df['row_index'] != -1].copy()
 
-    # Konwersja metryk na typ numeryczny
     metrics = ['accuracy', 'macro_precision', 'macro_recall', 'macro_f1']
     for col in metrics:
         summary_df[col] = pd.to_numeric(summary_df[col], errors='coerce')
@@ -23,9 +20,6 @@ def analyze_llm_results(csv_path: str):
 
     sns.set_theme(style="whitegrid")
 
-    # ---------------------------------------------------------
-    # 1. Porównanie Macro F1 dla modeli i promptów
-    # ---------------------------------------------------------
     plt.figure(figsize=(10, 6))
     summary_df['Model_Prompt'] = summary_df['model'] + ' (' + summary_df['prompt_variant'] + ')'
     plot_df = summary_df.sort_values('macro_f1', ascending=False)
@@ -37,11 +31,9 @@ def analyze_llm_results(csv_path: str):
     plt.xlim(0, 1.0)
     plt.legend(title='Model', bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
-    plt.show()  # Wyświetla w PyCharmie zamiast zapisywać
+    plt.show()
 
-    # ---------------------------------------------------------
-    # 2. Analiza wpływu złożoności promptu na Accuracy
-    # ---------------------------------------------------------
+
     plt.figure(figsize=(8, 5))
     sns.lineplot(data=summary_df, x='prompt_variant', y='accuracy', hue='model', marker='o')
     plt.title('Wpływ szczegółowości promptu na Accuracy')
@@ -51,9 +43,7 @@ def analyze_llm_results(csv_path: str):
     plt.tight_layout()
     plt.show()
 
-    # ---------------------------------------------------------
-    # PRZYGOTOWANIE DANYCH DLA NAJLEPSZEGO MODELU
-    # ---------------------------------------------------------
+
     best_combo = top_models.iloc[0]
     best_model = best_combo['model']
     best_prompt = best_combo['prompt_variant']
@@ -64,12 +54,9 @@ def analyze_llm_results(csv_path: str):
     y_true = best_preds['true_label'].astype(str)
     y_pred = best_preds['predicted_label'].astype(str)
 
-    # Pobieramy alfabetyczną listę unikalnych klas, by wykresy się ładnie zgrywały
+
     labels = sorted(list(set(y_true.unique()).union(set(y_pred.unique()))))
 
-    # ---------------------------------------------------------
-    # 3. Heatmapa (Macierz Błędów / Confusion Matrix)
-    # ---------------------------------------------------------
     cm = confusion_matrix(y_true, y_pred, labels=labels)
     plt.figure(figsize=(12, 10))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=labels, yticklabels=labels)
@@ -79,10 +66,6 @@ def analyze_llm_results(csv_path: str):
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
     plt.show()
-
-
-
-
 
 
 if __name__ == '__main__':

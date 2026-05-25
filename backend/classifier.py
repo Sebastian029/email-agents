@@ -2,19 +2,15 @@
 import os
 import django
 
-# --- konfiguracja Django, żeby korzystać z tego samego kodu co projekt ---
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "DjangoProject.settings")
 django.setup()
 
-from emails.tasks import classify_email_text  # UWAGA: dostosuj nazwę projektu/appki
+from emails.tasks import classify_email_text
 
 
 def evaluate_from_csv(csv_path: str, limit: int | None = None):
-    """
-    Czyta plik CSV z kolumnami clean_text, label
-    i liczy accuracy klasyfikatora opartego na classify_email_text().
-    """
+
     total = 0
     correct = 0
 

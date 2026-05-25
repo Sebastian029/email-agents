@@ -124,27 +124,20 @@ class FetchEmailsView(APIView):
             mail = imaplib.IMAP4_SSL(mailbox.imap_host, mailbox.imap_port)
             mail.login(mailbox.username, mailbox.password)
 
-            # 1. POBIERZ LISTĘ WSZYSTKICH FOLDERÓW
             status, folders = mail.list()
             if status != 'OK':
                 return 0
 
-            # 2. ITERUJ PO KAŻDYM FOLDERZE
             for folder_data in folders:
-                # folder_data wygląda np. tak: b'(\\HasNoChildren) "/" "INBOX"'
-                # Musimy wyciągnąć samą nazwę folderu (zwykle na końcu, w cudzysłowach)
                 folder_str = folder_data.decode()
                 folder_name = folder_str.split(' "/" ')[-1]
 
-                # Jeśli nazwa nie ma cudzysłowów, na Wp.pl może to być też podział spacją
                 if '"' in folder_name:
                     folder_name = folder_name.strip('"')
 
-                # Pomiń foldery typu Kosz / Spam, jeśli nie chcesz ich analizować
                 if any(skip in folder_name.lower() for skip in ['trash', 'kosz', 'spam']):
                     continue
 
-                # 3. WYBIERZ AKTUALNY FOLDER
                 status, _ = mail.select(f'"{folder_name}"', readonly=True)
                 if status != 'OK':
                     continue
@@ -157,12 +150,9 @@ class FetchEmailsView(APIView):
                 if not uids:
                     continue
 
-                # 4. POBIERANIE WIADOMOŚCI DLA DANEGO FOLDERU
-                for uid in uids[-50:]:  # Pobierasz ostatnie 50 z każdego folderu
-                    uid_str = f"{folder_name}-{uid.decode()}" # WAŻNE: Dodaj nazwę folderu do UID!
+                for uid in uids[-100:]:
+                    uid_str = f"{folder_name}-{uid.decode()}"
 
-                    # Reszta Twojego kodu pobierającego e-maile
-                    # (upewnij się, że uid w fetch to wciąż oryginalne `uid`, a nie `uid_str`)
                     status, msg_data = mail.fetch(uid, '(RFC822)')
                     if status != 'OK' or not msg_data:
                         continue
@@ -180,7 +170,7 @@ class FetchEmailsView(APIView):
 
                     existing = EmailMessage.objects.filter(
                         mailbox=mailbox,
-                        uid=uid_str,  # Używasz zmodyfikowanego UID
+                        uid=uid_str,
                     ).first()
 
                     defaults = {
@@ -280,7 +270,7 @@ class ListEmailsView(APIView):
                 qs = qs.filter(processed=False)
 
         limit = min(int(request.query_params.get('limit', 100)), 500)
-        # Pobierz więcej rekordów, potem zostaw po jednym (najnowszym) na wątek
+
         fetch_limit = min(limit * 8, 2000)
         emails = list(qs.order_by('-received_at')[:fetch_limit])
         threads = collapse_to_latest_per_thread(emails)[:limit]
@@ -563,7 +553,7 @@ class ThreadSummaryView(APIView):
                 "----------\n\n"
             )
 
-        from .tasks import query_ollama  # import lokalny, żeby uniknąć cykli
+        from .tasks import query_ollama
 
         prompt = f"""
             Streszcz historię mailową poniżej.
@@ -583,7 +573,6 @@ class ThreadSummaryView(APIView):
 
         summary = query_ollama(prompt).strip()
 
-        # Zapisujemy podsumowanie do głównego maila wątku (tego, o który pytaliśmy)
         email.thread_summary = summary
         email.save(update_fields=['thread_summary'])
 
