@@ -91,8 +91,6 @@ def agent_classify_email(email_id=None):
 
     try:
         email = EmailMessage.objects.get(id=email_id)
-        print(f"🕵️ [Classifier] Analizuję maila ID: {email.id} | Temat: {email.subject}")
-
         tresc_maila = email.body_text if email.body_text else email.body_html
 
         category, priority = classify_email_text(tresc_maila)
@@ -101,13 +99,10 @@ def agent_classify_email(email_id=None):
         email.priority_score = priority
         email.save()
 
-        print(f"✅ [Classifier] Wynik: {category} (Priorytet: {priority})")
-
         async_task('emails.tasks.agent_summarize_email', email.id)
         return email.id
 
     except Exception as e:
-        print(f"❌ [Classifier] Błąd: {str(e)}")
         async_task('emails.tasks.agent_summarize_email', email_id)
         return None
 
@@ -121,10 +116,8 @@ def agent_summarize_email(email_id=None):
         email = EmailMessage.objects.get(id=email_id)
 
         if email.category == "SPAM":
-            print(f"🛑 [Summarizer] Pomijam SPAM (ID: {email.id})")
             return email.id
 
-        print(f"🧠 [Summarizer] Streszczam maila ID: {email.id}")
         tresc_maila = email.body_text if email.body_text else email.body_html
 
         prompt = f"""
@@ -144,13 +137,11 @@ def agent_summarize_email(email_id=None):
 
         email.ai_summary = summary
         email.save()
-        print(f"✅ [Summarizer] Gotowe.")
 
         async_task('emails.tasks.agent_draft_reply', email.id)
         return email.id
 
     except Exception as e:
-        print(f"❌ [Summarizer] Błąd: {str(e)}")
         async_task('emails.tasks.agent_draft_reply', email_id)
         return None
 
@@ -164,12 +155,10 @@ def agent_draft_reply(email_id=None):
         email = EmailMessage.objects.get(id=email_id)
 
         if email.category == "SPAM":
-            print(f"🛑 [Drafter] Pomijam SPAM (ID: {email.id})")
             email.processed = True
             email.save()
             return email.id
 
-        print(f"✍️ [Drafter] Piszę odpowiedź dla ID: {email.id}")
 
         prompt = f"""
         Przygotuj uprzejmą propozycję odpowiedzi na tego maila w języku polskim.
@@ -191,9 +180,7 @@ def agent_draft_reply(email_id=None):
         email.processed_at = timezone.now()
         email.save()
 
-        print(f"✅ [Drafter] Odpowiedź gotowa. Koniec procesu dla ID: {email.id}.")
         return email.id
 
     except Exception as e:
-        print(f"❌ [Drafter] Błąd: {str(e)}")
         return None

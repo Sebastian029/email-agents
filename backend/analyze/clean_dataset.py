@@ -1,8 +1,4 @@
-﻿"""
-Przygotowanie zbioru etykietowanego z The 20 Newsgroups (6 kategorii).
-Etykiety pochodzą z datasetu (ground truth), bez labelowania przez LLM.
-"""
-
+﻿
 import re
 
 import pandas as pd
@@ -43,14 +39,19 @@ def load_newsgroups_subset():
 
 
 def main():
-    print("Ładowanie The 20 Newsgroups (6 kategorii)...")
     df = load_newsgroups_subset()
-    print(f"Liczba rekordów po czyszczeniu: {len(df)}")
+    samples = []
+    for label, group in df.groupby("label"):
+        sampled_group = group.sample(min(len(group), 500), random_state=RANDOM_STATE)
+        samples.append(sampled_group)
 
-    n = min(SAMPLE_SIZE, len(df))
-    df_sample = df.sample(n, random_state=RANDOM_STATE).copy()
+    df_sample = pd.concat(samples).reset_index(drop=True)
+
+
+    print("Dostępne kolumny:", df_sample.columns.tolist())
+
     df_sample.to_csv(LABELED_CSV, index=False)
-    print(f"\nZapisano: {LABELED_CSV} ({n} wierszy)")
+    print(f"\nZapisano: {LABELED_CSV} ({len(df_sample)} wierszy)")
 
     print("\n===== PODSUMOWANIE KLAS =====\n")
     class_counts = df_sample["label"].value_counts()
